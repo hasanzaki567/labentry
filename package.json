@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@undecaf/zbar-wasm": "^0.11.0",
+    "@vladmandic/face-api": "^1.7.15",
     "dexie": "^4.3.0",
     "lucide-react": "^0.574.0",
     "react": "^19.2.0",
