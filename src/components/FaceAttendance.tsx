@@ -7,7 +7,7 @@ interface FaceAttendanceProps {
   modelsLoaded: boolean;
 }
 
-const MATCH_THRESHOLD = 0.65; // 0.65 distance = ~35% confidence still matches (very forgiving)
+const MATCH_THRESHOLD = 0.45; // stricter: 0.45 distance = 55% confidence minimum
 
 const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -25,6 +25,7 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
   const [recentAttendance, setRecentAttendance] = useState<{ name: string; time: Date; confidence: number }[]>([]);
   const [currentDetection, setCurrentDetection] = useState<string | null>(null);
   const [attendancePopup, setAttendancePopup] = useState<{ name: string; confidence: number } | null>(null);
+  const isPausedRef = useRef(false);
 
   useEffect(() => {
     loadFaces();
@@ -33,19 +34,37 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
     };
   }, []);
 
+  // Listen for Enter key to dismiss popup and resume scanning
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && attendancePopup) {
+        setAttendancePopup(null);
+        isPausedRef.current = false;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [attendancePopup]);
+
   const loadFaces = async () => {
     const faces = await getAllFaces();
     setRegisteredFaces(faces);
 
     if (faces.length > 0) {
-      // Build face matcher from registered faces
-      const labeledDescriptors = faces.map(face => {
-        const descriptor = new Float32Array(face.descriptor);
-        return new faceapi.LabeledFaceDescriptors(
-          `${face.id}:${face.name}`,
-          [descriptor]
-        );
-      });
+      // Group descriptors by name so multiple photos of the same person improve accuracy
+      const descriptorsByName = new Map<string, { id: number; descriptors: Float32Array[] }>();
+      for (const face of faces) {
+        const key = face.name.toLowerCase().trim();
+        if (!descriptorsByName.has(key)) {
+          descriptorsByName.set(key, { id: face.id!, descriptors: [] });
+        }
+        descriptorsByName.get(key)!.descriptors.push(new Float32Array(face.descriptor));
+      }
+
+      const labeledDescriptors = Array.from(descriptorsByName.entries()).map(
+        ([name, { id, descriptors }]) =>
+          new faceapi.LabeledFaceDescriptors(`${id}:${name}`, descriptors)
+      );
       faceMatcher.current = new faceapi.FaceMatcher(labeledDescriptors, MATCH_THRESHOLD);
     }
   };
@@ -122,7 +141,7 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
   };
 
   const detectLoop = useCallback(async () => {
-    if (!videoRef.current || !overlayCanvasRef.current || !faceMatcher.current) {
+    if (!videoRef.current || !overlayCanvasRef.current || !faceMatcher.current || isPausedRef.current) {
       animFrameRef.current = requestAnimationFrame(detectLoop);
       return;
     }
@@ -146,18 +165,18 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
     ctx.clearRect(0, 0, overlay.width, overlay.height);
 
     try {
-      // Use TinyFaceDetector first (much faster for real-time)
-      const tinyOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.1 });
+      // Use SSD MobileNet as primary — more accurate descriptors for recognition
+      const ssdOptions = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.3 });
       let detections = await faceapi
-        .detectAllFaces(video as any, tinyOptions)
+        .detectAllFaces(video as any, ssdOptions)
         .withFaceLandmarks()
         .withFaceDescriptors();
 
-      // Fallback to SSD only if TinyFaceDetector found nothing
+      // Fallback to TinyFaceDetector with larger input if SSD found nothing
       if (detections.length === 0) {
-        const ssdOptions = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.15 });
+        const tinyOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 });
         detections = await faceapi
-          .detectAllFaces(video as any, ssdOptions)
+          .detectAllFaces(video as any, tinyOptions)
           .withFaceLandmarks()
           .withFaceDescriptors();
       }
@@ -172,11 +191,13 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
           const box = detection.detection.box;
 
           if (match.label !== 'unknown') {
-            const [faceId, faceName] = match.label.split(':');
+            const [faceId, rawName] = match.label.split(':');
+            // Capitalize first letter of each word for display
+            const faceName = rawName.replace(/\b\w/g, c => c.toUpperCase());
             const confidence = Math.round((1 - match.distance) * 100);
 
-            // Accept matches at 40% or above
-            if (confidence >= 40) {
+            // Accept matches at 55% or above for reliable recognition
+            if (confidence >= 55) {
               // Draw green box for recognized
               ctx.strokeStyle = '#10b981';
               ctx.lineWidth = 3;
@@ -223,12 +244,12 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
                   ...prev.slice(0, 9)
                 ]);
 
-                // Show attendance popup
+                // Show attendance popup and pause scanning
+                isPausedRef.current = true;
                 setAttendancePopup({ name: faceName, confidence });
-                setTimeout(() => setAttendancePopup(null), 4000);
               }
             } else {
-              // Below 40% — treat as weak match, show yellow box
+              // Below 55% — treat as weak match, show yellow box
               ctx.strokeStyle = '#f59e0b';
               ctx.lineWidth = 2;
               ctx.strokeRect(box.x, box.y, box.width, box.height);
@@ -364,16 +385,17 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
             </div>
           )}
 
-          {/* Attendance Marked Popup */}
+          {/* Attendance Marked Popup - fullscreen overlay */}
           {attendancePopup && (
-            <div className="attendance-popup">
-              <div className="attendance-popup-content">
-                <CheckCircle size={32} />
-                <div className="attendance-popup-text">
-                  <span className="attendance-popup-title">Attendance Marked!</span>
-                  <span className="attendance-popup-name">Are you <strong>{attendancePopup.name}</strong>?</span>
-                  <span className="attendance-popup-conf">{attendancePopup.confidence}% match</span>
+            <div className="attendance-popup-overlay" onClick={() => { setAttendancePopup(null); isPausedRef.current = false; }}>
+              <div className="attendance-popup-modal">
+                <div className="attendance-popup-icon">
+                  <CheckCircle size={64} />
                 </div>
+                <span className="attendance-popup-title">Attendance Registered</span>
+                <span className="attendance-popup-name-big">{attendancePopup.name}</span>
+                <span className="attendance-popup-conf">{attendancePopup.confidence}% match</span>
+                <span className="attendance-popup-hint">Press <kbd>Enter</kbd> to continue</span>
               </div>
             </div>
           )}
