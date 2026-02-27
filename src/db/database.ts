@@ -41,6 +41,11 @@ export class LabEntryDatabase extends Dexie {
       faces: '++id, name, registeredAt',
       attendance: '++id, faceId, name, timestamp'
     });
+    this.version(3).stores({
+      barcodes: '++id, barcodeText, barcodeFormat, scannedAt',
+      faces: '++id, name, registeredAt',
+      attendance: '++id, faceId, name, timestamp, [faceId+timestamp]'
+    });
   }
 }
 
@@ -91,6 +96,26 @@ export const addAttendance = async (entry: Omit<AttendanceRecord, 'id'>): Promis
 
 export const getAllAttendance = async (): Promise<AttendanceRecord[]> => {
   return await db.attendance.orderBy('timestamp').reverse().toArray();
+};
+
+export const getLatestAttendanceByFaceId = async (faceId: number): Promise<AttendanceRecord | undefined> => {
+  const records = await db.attendance.where('faceId').equals(faceId).toArray();
+  return records.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+};
+
+export const hasAttendanceForFaceOnDate = async (faceId: number, date: Date = new Date()): Promise<boolean> => {
+  const dayStart = new Date(date);
+  dayStart.setHours(0, 0, 0, 0);
+
+  const dayEnd = new Date(dayStart);
+  dayEnd.setDate(dayEnd.getDate() + 1);
+
+  const existing = await db.attendance
+    .where('[faceId+timestamp]')
+    .between([faceId, dayStart], [faceId, dayEnd], true, false)
+    .first();
+
+  return !!existing;
 };
 
 export const getTodayAttendance = async (): Promise<AttendanceRecord[]> => {
