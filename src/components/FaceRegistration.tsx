@@ -25,6 +25,12 @@ const FaceRegistration: React.FC<FaceRegistrationProps> = ({ modelsLoaded }) => 
   const streamRef = useRef<MediaStream | null>(null);
   const detectIntervalRef = useRef<number | null>(null);
   const isRegisteringRef = useRef(false);
+  const nameRef = useRef(name);
+
+  // Keep nameRef in sync with name state
+  useEffect(() => {
+    nameRef.current = name;
+  }, [name]);
 
   useEffect(() => {
     loadRegisteredFaces();
@@ -144,11 +150,20 @@ const FaceRegistration: React.FC<FaceRegistrationProps> = ({ modelsLoaded }) => 
 
         setFaceDetected(true);
 
-        // Auto-register!
-        if (!isRegisteringRef.current) {
+        // Auto-register only if name is filled
+        if (!isRegisteringRef.current && nameRef.current.trim()) {
           isRegisteringRef.current = true;
           await autoRegisterFace(video, detection.descriptor);
           return; // stop the loop after registering
+        } else if (!nameRef.current.trim()) {
+          // Name cleared while camera open — show message on overlay
+          ctx.fillStyle = '#f59e0b';
+          const warnLabel = 'Enter a name to register';
+          const ww = ctx.measureText(warnLabel).width;
+          ctx.fillRect(box.x, box.y + box.height + 4, ww + 16, 28);
+          ctx.fillStyle = '#fff';
+          ctx.font = 'bold 14px Inter, sans-serif';
+          ctx.fillText(warnLabel, box.x + 8, box.y + box.height + 22);
         }
       } else {
         setFaceDetected(false);
@@ -176,14 +191,23 @@ const FaceRegistration: React.FC<FaceRegistrationProps> = ({ modelsLoaded }) => 
 
       const descriptorArray = Array.from(descriptor);
 
+      const currentName = nameRef.current.trim();
+      if (!currentName) {
+        setError('Name is required. Please enter a name.');
+        isRegisteringRef.current = false;
+        detectIntervalRef.current = requestAnimationFrame(runDetectionLoop);
+        setIsProcessing(false);
+        return;
+      }
+
       await addFace({
-        name: name.trim(),
+        name: currentName,
         photoDataUrl,
         descriptor: descriptorArray,
         registeredAt: new Date()
       });
 
-      setSuccess(`${name.trim()} has been registered successfully!`);
+      setSuccess(`${currentName} has been registered successfully!`);
       setPhotoPreview(photoDataUrl);
       stopCamera();
       setName('');
