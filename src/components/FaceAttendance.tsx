@@ -9,7 +9,18 @@ interface FaceAttendanceProps {
 
 const MATCH_THRESHOLD = 0.45; // stricter: 0.45 distance = 55% confidence minimum
 const AUTO_MARK_CONFIDENCE = 55;
-const ATTENDANCE_COOLDOWN_MS = 30_000;
+const ATTENDANCE_COOLDOWN_MS = 10_000;
+
+// Emoji map for face expressions
+const EXPRESSION_EMOJI: Record<string, string> = {
+  neutral: '😐',
+  happy: '😄',
+  sad: '😢',
+  angry: '😠',
+  fearful: '😨',
+  disgusted: '🤢',
+  surprised: '😲',
+};
 
 const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -76,14 +87,14 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
     const lastSeenMs = lastAttendanceRef.current.get(key) || 0;
 
     if (nowMs - lastSeenMs < ATTENDANCE_COOLDOWN_MS) {
-      return 'Cooldown active (30s)';
+      return 'Cooldown active (10s)';
     }
 
     const latestRecord = await getLatestAttendanceByFaceId(faceId);
     if (latestRecord) {
       const latestMs = new Date(latestRecord.timestamp).getTime();
       if (nowMs - latestMs < ATTENDANCE_COOLDOWN_MS) {
-        return 'Cooldown active (30s)';
+        return 'Cooldown active (10s)';
       }
     }
 
@@ -247,20 +258,33 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
     ctx.clearRect(0, 0, overlay.width, overlay.height);
 
     try {
-      // Use SSD MobileNet as primary — more accurate descriptors for recognition
+      // Use SSD MobileNet for reliable face recognition
       const ssdOptions = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.3 });
       let detections = await faceapi
         .detectAllFaces(video as any, ssdOptions)
         .withFaceLandmarks()
         .withFaceDescriptors();
 
-      // Fallback to TinyFaceDetector with larger input if SSD found nothing
+      // Fallback to TinyFaceDetector if SSD found nothing
       if (detections.length === 0) {
-        const tinyOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 });
+        const tinyOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 });
         detections = await faceapi
           .detectAllFaces(video as any, tinyOptions)
           .withFaceLandmarks()
           .withFaceDescriptors();
+      }
+
+      // Try to get expressions separately (won't break if model not loaded)
+      let expressionResults: faceapi.WithFaceExpressions<faceapi.WithFaceLandmarks<{ detection: faceapi.FaceDetection }>>[] = [];
+      try {
+        if (faceapi.nets.faceExpressionNet.isLoaded) {
+          expressionResults = await faceapi
+            .detectAllFaces(video as any, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.3 }))
+            .withFaceLandmarks()
+            .withFaceExpressions();
+        }
+      } catch {
+        // Expression detection failed, continue without emojis
       }
 
       if (detections.length > 0) {
@@ -271,6 +295,28 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
         for (const detection of resizedDetections) {
           const match = faceMatcher.current!.findBestMatch(detection.descriptor);
           const box = detection.detection.box;
+
+          // Find matching expression for this face by box overlap
+          let emoji = '';
+          for (const expr of expressionResults) {
+            const exprBox = expr.detection.box;
+            const overlap = Math.abs(exprBox.x - box.x) < box.width * 0.5 &&
+                            Math.abs(exprBox.y - box.y) < box.height * 0.5;
+            if (overlap) {
+              const sorted = Object.entries(expr.expressions).sort((a, b) => (b[1] as number) - (a[1] as number));
+              emoji = EXPRESSION_EMOJI[sorted[0][0]] || '';
+              break;
+            }
+          }
+
+          // Draw emoji above the bounding box if found
+          if (emoji) {
+            const emojiSize = Math.max(28, box.width * 0.35);
+            ctx.font = `${emojiSize}px serif`;
+            ctx.textAlign = 'center';
+            ctx.fillText(emoji, box.x + box.width / 2, box.y - 6);
+            ctx.textAlign = 'start';
+          }
 
           if (match.label !== 'unknown') {
             const [faceId, rawName] = match.label.split(':');
@@ -283,14 +329,6 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
               ctx.strokeStyle = '#10b981';
               ctx.lineWidth = 3;
               ctx.strokeRect(box.x, box.y, box.width, box.height);
-
-              // Draw name label
-              ctx.fillStyle = '#10b981';
-              const textWidth = ctx.measureText(faceName).width;
-              ctx.fillRect(box.x, box.y - 28, textWidth + 16, 28);
-              ctx.fillStyle = '#ffffff';
-              ctx.font = 'bold 14px Inter, sans-serif';
-              ctx.fillText(faceName, box.x + 8, box.y - 8);
 
               const parsedFaceId = parseInt(faceId, 10);
               const reason = await getAttendanceBlockReason(parsedFaceId, new Date());
@@ -311,13 +349,6 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
               ctx.lineWidth = 2;
               ctx.strokeRect(box.x, box.y, box.width, box.height);
 
-              ctx.fillStyle = '#f59e0b';
-              const textWidth = ctx.measureText('Low confidence').width;
-              ctx.fillRect(box.x, box.y - 28, textWidth + 16, 28);
-              ctx.fillStyle = '#ffffff';
-              ctx.font = 'bold 14px Inter, sans-serif';
-              ctx.fillText('Low confidence', box.x + 8, box.y - 8);
-
               setCurrentDetection(`Low confidence for ${faceName}`);
             }
           } else {
@@ -325,13 +356,6 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
             ctx.strokeStyle = '#ef4444';
             ctx.lineWidth = 2;
             ctx.strokeRect(box.x, box.y, box.width, box.height);
-
-            ctx.fillStyle = '#ef4444';
-            const textWidth = ctx.measureText('Unknown').width;
-            ctx.fillRect(box.x, box.y - 28, textWidth + 16, 28);
-            ctx.fillStyle = '#ffffff';
-            ctx.font = 'bold 14px Inter, sans-serif';
-            ctx.fillText('Unknown', box.x + 8, box.y - 8);
 
             setCurrentDetection('Unknown face detected');
           }
