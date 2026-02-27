@@ -1,27 +1,17 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import * as faceapi from '@vladmandic/face-api';
-import { getAllBarcodes, type BarcodeEntry } from './db/database';
 import Header from './components/Header';
-import BarcodeScanner from './components/BarcodeScanner';
-import ScannedBarcodesList from './components/ScannedBarcodesList';
 import FaceRegistration from './components/FaceRegistration';
 import FaceAttendance from './components/FaceAttendance';
 import AttendanceRecords from './components/AttendanceRecords';
 import './App.css';
 
-type AppTab = 'barcode' | 'face-register' | 'face-attendance' | 'attendance-records';
+type AppTab = 'face-register' | 'face-attendance' | 'attendance-records';
 
 function App() {
-  const [barcodes, setBarcodes] = useState<BarcodeEntry[]>([]);
-  const [isScanning, setIsScanning] = useState(false);
-  const [activeTab, setActiveTab] = useState<AppTab>('barcode');
+  const [activeTab, setActiveTab] = useState<AppTab>('face-register');
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
-
-  // Load saved barcodes on mount
-  useEffect(() => {
-    loadBarcodes();
-  }, []);
 
   // Load face-api models when face tab is first accessed
   useEffect(() => {
@@ -49,28 +39,12 @@ function App() {
     }
   };
 
-  const loadBarcodes = useCallback(async () => {
-    const data = await getAllBarcodes();
-    setBarcodes(data);
-  }, []);
-
-  const handleBarcodeScanned = useCallback((barcode: BarcodeEntry) => {
-    setBarcodes(prev => [barcode, ...prev]);
-  }, []);
-
   return (
     <div className="app">
-      <Header totalScans={barcodes.length} isScanning={isScanning} />
+      <Header />
       
       {/* Tab Navigation */}
       <nav className="app-tabs">
-        <button 
-          className={`tab-btn ${activeTab === 'barcode' ? 'active' : ''}`}
-          onClick={() => setActiveTab('barcode')}
-        >
-          <span className="tab-icon">📊</span>
-          Barcode Scanner
-        </button>
         <button 
           className={`tab-btn ${activeTab === 'face-register' ? 'active' : ''}`}
           onClick={() => setActiveTab('face-register')}
@@ -103,24 +77,6 @@ function App() {
       )}
 
       <main className="app-main">
-        {activeTab === 'barcode' && (
-          <>
-            <div className="scanner-section">
-              <BarcodeScanner 
-                onBarcodeScanned={handleBarcodeScanned}
-                isScanning={isScanning}
-                setIsScanning={setIsScanning}
-              />
-            </div>
-            <div className="list-section">
-              <ScannedBarcodesList 
-                barcodes={barcodes} 
-                onRefresh={loadBarcodes}
-              />
-            </div>
-          </>
-        )}
-
         {activeTab === 'face-register' && (
           <div className="face-section">
             <FaceRegistration modelsLoaded={modelsLoaded} />

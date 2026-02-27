@@ -9,7 +9,8 @@ interface FaceAttendanceProps {
 
 const MATCH_THRESHOLD = 0.45; // stricter: 0.45 distance = 55% confidence minimum
 const AUTO_MARK_CONFIDENCE = 55;
-const ATTENDANCE_COOLDOWN_MS = 30_000;
+const ATTENDANCE_COOLDOWN_MS = 10_000;
+const ALREADY_MARKED_POPUP_COOLDOWN_MS = 15_000;
 
 const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -19,6 +20,7 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
   const animFrameRef = useRef<number | null>(null);
   const faceMatcher = useRef<faceapi.FaceMatcher | null>(null);
   const lastAttendanceRef = useRef<Map<string, number>>(new Map());
+  const lastAlreadyMarkedPopupRef = useRef<Map<string, number>>(new Map());
 
   const [isScanning, setIsScanning] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
@@ -27,6 +29,7 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
   const [recentAttendance, setRecentAttendance] = useState<{ name: string; time: Date }[]>([]);
   const [currentDetection, setCurrentDetection] = useState<string | null>(null);
   const [attendancePopup, setAttendancePopup] = useState<{ name: string } | null>(null);
+  const [alreadyMarkedPopup, setAlreadyMarkedPopup] = useState<{ name: string } | null>(null);
   const isPausedRef = useRef(false);
 
   useEffect(() => {
@@ -50,6 +53,19 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
       window.speechSynthesis.speak(utterance);
     }
   }, [attendancePopup]);
+
+  useEffect(() => {
+    if (!alreadyMarkedPopup) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setAlreadyMarkedPopup(null);
+      isPausedRef.current = false;
+    }, 2200);
+
+    return () => clearTimeout(timer);
+  }, [alreadyMarkedPopup]);
 
   const captureSnapshot = (): string | undefined => {
     if (!videoRef.current || !canvasRef.current) {
@@ -120,12 +136,15 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
       if (e.key === 'Enter' && attendancePopup) {
         setAttendancePopup(null);
         isPausedRef.current = false;
+      } else if (e.key === 'Enter' && alreadyMarkedPopup) {
+        setAlreadyMarkedPopup(null);
+        isPausedRef.current = false;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [attendancePopup]);
+  }, [attendancePopup, alreadyMarkedPopup]);
 
   const loadFaces = async () => {
     const faces = await getAllFaces();
@@ -296,6 +315,16 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
               const reason = await getAttendanceBlockReason(parsedFaceId, new Date());
               if (reason) {
                 setCurrentDetection(`${faceName} - ${reason}`);
+                if (reason === 'Already marked today' && !alreadyMarkedPopup) {
+                  const nowMs = Date.now();
+                  const cooldownKey = String(parsedFaceId);
+                  const lastPopupMs = lastAlreadyMarkedPopupRef.current.get(cooldownKey) || 0;
+                  if (nowMs - lastPopupMs >= ALREADY_MARKED_POPUP_COOLDOWN_MS) {
+                    lastAlreadyMarkedPopupRef.current.set(cooldownKey, nowMs);
+                    isPausedRef.current = true;
+                    setAlreadyMarkedPopup({ name: faceName });
+                  }
+                }
               } else {
                 setCurrentDetection(`Recognized: ${faceName}`);
                 await recordAttendance({
@@ -345,7 +374,7 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
     }
 
     animFrameRef.current = requestAnimationFrame(detectLoop);
-  }, []);
+  }, [alreadyMarkedPopup]);
 
   const toggleScanning = async () => {
     if (isScanning) {
@@ -452,6 +481,20 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
                 <span className="attendance-popup-title">The attendance has been recorded for</span>
                 <span className="attendance-popup-name-big">{attendancePopup.name}</span>
                 <span className="attendance-popup-conf">Thank you!</span>
+                <span className="attendance-popup-hint">Press <kbd>Enter</kbd> to continue</span>
+              </div>
+            </div>
+          )}
+
+          {alreadyMarkedPopup && (
+            <div className="attendance-popup-overlay" onClick={() => { setAlreadyMarkedPopup(null); isPausedRef.current = false; }}>
+              <div className="attendance-popup-modal">
+                <div className="attendance-popup-icon">
+                  <AlertCircle size={64} />
+                </div>
+                <span className="attendance-popup-title">Attendance already marked for</span>
+                <span className="attendance-popup-name-big">{alreadyMarkedPopup.name}</span>
+                <span className="attendance-popup-conf">No duplicate entry was created.</span>
                 <span className="attendance-popup-hint">Press <kbd>Enter</kbd> to continue</span>
               </div>
             </div>

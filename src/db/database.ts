@@ -7,6 +7,8 @@ export interface BarcodeEntry {
   scannedAt: Date;
   confidence: number;
   rawData?: string;
+  attendanceAction?: 'check-in' | 'check-out';
+  attendanceStatus?: 'on-time' | 'late' | 'completed';
 }
 
 export interface RegisteredFace {
@@ -46,6 +48,11 @@ export class LabEntryDatabase extends Dexie {
       faces: '++id, name, registeredAt',
       attendance: '++id, faceId, name, timestamp, [faceId+timestamp]'
     });
+    this.version(4).stores({
+      barcodes: '++id, barcodeText, barcodeFormat, scannedAt, [barcodeText+scannedAt]',
+      faces: '++id, name, registeredAt',
+      attendance: '++id, faceId, name, timestamp, [faceId+timestamp]'
+    });
   }
 }
 
@@ -70,6 +77,28 @@ export const clearAllBarcodes = async (): Promise<void> => {
 
 export const getBarcodeCount = async (): Promise<number> => {
   return await db.barcodes.count();
+};
+
+export const getTodayBarcodesByText = async (barcodeText: string, date: Date = new Date()): Promise<BarcodeEntry[]> => {
+  const dayStart = new Date(date);
+  dayStart.setHours(0, 0, 0, 0);
+
+  const dayEnd = new Date(dayStart);
+  dayEnd.setDate(dayEnd.getDate() + 1);
+
+  const records = await db.barcodes.where('barcodeText').equals(barcodeText).toArray();
+
+  return records
+    .filter((record) => {
+      const scannedAt = new Date(record.scannedAt).getTime();
+      return scannedAt >= dayStart.getTime() && scannedAt < dayEnd.getTime();
+    })
+    .sort((a, b) => new Date(b.scannedAt).getTime() - new Date(a.scannedAt).getTime());
+};
+
+export const getLatestBarcodeByText = async (barcodeText: string): Promise<BarcodeEntry | undefined> => {
+  const records = await db.barcodes.where('barcodeText').equals(barcodeText).toArray();
+  return records.sort((a, b) => new Date(b.scannedAt).getTime() - new Date(a.scannedAt).getTime())[0];
 };
 
 // Face registration helper functions
