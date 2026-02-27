@@ -36,6 +36,21 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
     };
   }, []);
 
+  useEffect(() => {
+    if (!attendancePopup) {
+      return;
+    }
+
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(`The attendance of ${attendancePopup.name} has been recorded. Thank you!`);
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      window.speechSynthesis.speak(utterance);
+    }
+  }, [attendancePopup]);
+
   const captureSnapshot = (): string | undefined => {
     if (!videoRef.current || !canvasRef.current) {
       return undefined;
@@ -434,8 +449,9 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
                 <div className="attendance-popup-icon">
                   <CheckCircle size={64} />
                 </div>
-                <span className="attendance-popup-title">Attendance Registered</span>
+                <span className="attendance-popup-title">The attendance has been recorded for</span>
                 <span className="attendance-popup-name-big">{attendancePopup.name}</span>
+                <span className="attendance-popup-conf">Thank you!</span>
                 <span className="attendance-popup-hint">Press <kbd>Enter</kbd> to continue</span>
               </div>
             </div>
