@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import * as faceapi from '@vladmandic/face-api';
-import { getAllFaces, addAttendance, type RegisteredFace } from '../db/database';
+import { getAllFaces, addAttendance, getLatestAttendanceByFaceId, hasAttendanceForFaceOnDate, type RegisteredFace } from '../db/database';
 import { Camera, CameraOff, Loader2, AlertCircle, ScanLine, CheckCircle, UserCheck } from 'lucide-react';
 
 interface FaceAttendanceProps {
@@ -8,6 +8,8 @@ interface FaceAttendanceProps {
 }
 
 const MATCH_THRESHOLD = 0.45; // stricter: 0.45 distance = 55% confidence minimum
+const AUTO_MARK_CONFIDENCE = 55;
+const ATTENDANCE_COOLDOWN_MS = 30_000;
 
 const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -22,9 +24,9 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
   const [isInitializing, setIsInitializing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [registeredFaces, setRegisteredFaces] = useState<RegisteredFace[]>([]);
-  const [recentAttendance, setRecentAttendance] = useState<{ name: string; time: Date; confidence: number }[]>([]);
+  const [recentAttendance, setRecentAttendance] = useState<{ name: string; time: Date }[]>([]);
   const [currentDetection, setCurrentDetection] = useState<string | null>(null);
-  const [attendancePopup, setAttendancePopup] = useState<{ name: string; confidence: number } | null>(null);
+  const [attendancePopup, setAttendancePopup] = useState<{ name: string } | null>(null);
   const isPausedRef = useRef(false);
 
   useEffect(() => {
@@ -34,7 +36,70 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
     };
   }, []);
 
-  // Listen for Enter key to dismiss popup and resume scanning
+  const captureSnapshot = (): string | undefined => {
+    if (!videoRef.current || !canvasRef.current) {
+      return undefined;
+    }
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const snapCtx = canvas.getContext('2d');
+    if (!snapCtx) {
+      return undefined;
+    }
+
+    snapCtx.drawImage(video, 0, 0);
+    return canvas.toDataURL('image/jpeg', 0.6);
+  };
+
+  const getAttendanceBlockReason = async (faceId: number, now: Date): Promise<string | null> => {
+    const nowMs = now.getTime();
+    const key = String(faceId);
+    const lastSeenMs = lastAttendanceRef.current.get(key) || 0;
+
+    if (nowMs - lastSeenMs < ATTENDANCE_COOLDOWN_MS) {
+      return 'Cooldown active (30s)';
+    }
+
+    const latestRecord = await getLatestAttendanceByFaceId(faceId);
+    if (latestRecord) {
+      const latestMs = new Date(latestRecord.timestamp).getTime();
+      if (nowMs - latestMs < ATTENDANCE_COOLDOWN_MS) {
+        return 'Cooldown active (30s)';
+      }
+    }
+
+    const alreadyMarkedToday = await hasAttendanceForFaceOnDate(faceId, now);
+    if (alreadyMarkedToday) {
+      return 'Already marked today';
+    }
+
+    return null;
+  };
+
+  const recordAttendance = async (entry: { faceId: number; name: string; confidence: number; photoDataUrl?: string }) => {
+    const now = new Date();
+    await addAttendance({
+      faceId: entry.faceId,
+      name: entry.name,
+      timestamp: now,
+      confidence: entry.confidence,
+      photoDataUrl: entry.photoDataUrl
+    });
+
+    lastAttendanceRef.current.set(String(entry.faceId), now.getTime());
+    setRecentAttendance(prev => [
+      { name: entry.name, time: now },
+      ...prev.slice(0, 9)
+    ]);
+    isPausedRef.current = true;
+    setAttendancePopup({ name: entry.name });
+  };
+
+  // Listen for keyboard actions on overlays
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Enter' && attendancePopup) {
@@ -42,6 +107,7 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
         isPausedRef.current = false;
       }
     };
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [attendancePopup]);
@@ -138,6 +204,7 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
 
     setIsScanning(false);
     setCurrentDetection(null);
+    isPausedRef.current = false;
   };
 
   const detectLoop = useCallback(async () => {
@@ -196,8 +263,7 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
             const faceName = rawName.replace(/\b\w/g, c => c.toUpperCase());
             const confidence = Math.round((1 - match.distance) * 100);
 
-            // Accept matches at 55% or above for reliable recognition
-            if (confidence >= 55) {
+            if (confidence >= AUTO_MARK_CONFIDENCE) {
               // Draw green box for recognized
               ctx.strokeStyle = '#10b981';
               ctx.lineWidth = 3;
@@ -205,63 +271,39 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
 
               // Draw name label
               ctx.fillStyle = '#10b981';
-              const textWidth = ctx.measureText(`${faceName} (${confidence}%)`).width;
+              const textWidth = ctx.measureText(faceName).width;
               ctx.fillRect(box.x, box.y - 28, textWidth + 16, 28);
               ctx.fillStyle = '#ffffff';
               ctx.font = 'bold 14px Inter, sans-serif';
-              ctx.fillText(`${faceName} (${confidence}%)`, box.x + 8, box.y - 8);
+              ctx.fillText(faceName, box.x + 8, box.y - 8);
 
-              setCurrentDetection(`${faceName} - ${confidence}% match`);
-
-              // Record attendance (prevent duplicates within 30 seconds)
-              const now = Date.now();
-              const lastTime = lastAttendanceRef.current.get(faceId) || 0;
-              if (now - lastTime > 30000) {
-                lastAttendanceRef.current.set(faceId, now);
-
-                // Capture snapshot
-                let photoDataUrl: string | undefined;
-                if (canvasRef.current) {
-                  canvasRef.current.width = video.videoWidth;
-                  canvasRef.current.height = video.videoHeight;
-                  const snapCtx = canvasRef.current.getContext('2d');
-                  if (snapCtx) {
-                    snapCtx.drawImage(video, 0, 0);
-                    photoDataUrl = canvasRef.current.toDataURL('image/jpeg', 0.6);
-                  }
-                }
-
-                await addAttendance({
-                  faceId: parseInt(faceId),
+              const parsedFaceId = parseInt(faceId, 10);
+              const reason = await getAttendanceBlockReason(parsedFaceId, new Date());
+              if (reason) {
+                setCurrentDetection(`${faceName} - ${reason}`);
+              } else {
+                setCurrentDetection(`Recognized: ${faceName}`);
+                await recordAttendance({
+                  faceId: parsedFaceId,
                   name: faceName,
-                  timestamp: new Date(),
                   confidence,
-                  photoDataUrl
+                  photoDataUrl: captureSnapshot()
                 });
-
-                setRecentAttendance(prev => [
-                  { name: faceName, time: new Date(), confidence },
-                  ...prev.slice(0, 9)
-                ]);
-
-                // Show attendance popup and pause scanning
-                isPausedRef.current = true;
-                setAttendancePopup({ name: faceName, confidence });
               }
             } else {
-              // Below 55% — treat as weak match, show yellow box
+              // Below threshold
               ctx.strokeStyle = '#f59e0b';
               ctx.lineWidth = 2;
               ctx.strokeRect(box.x, box.y, box.width, box.height);
 
               ctx.fillStyle = '#f59e0b';
-              const textWidth = ctx.measureText(`${faceName}? (${confidence}%)`).width;
+              const textWidth = ctx.measureText('Low confidence').width;
               ctx.fillRect(box.x, box.y - 28, textWidth + 16, 28);
               ctx.fillStyle = '#ffffff';
               ctx.font = 'bold 14px Inter, sans-serif';
-              ctx.fillText(`${faceName}? (${confidence}%)`, box.x + 8, box.y - 8);
+              ctx.fillText('Low confidence', box.x + 8, box.y - 8);
 
-              setCurrentDetection(`Weak match: ${faceName}? - ${confidence}%`);
+              setCurrentDetection(`Low confidence for ${faceName}`);
             }
           } else {
             // Draw red box for unknown
@@ -394,7 +436,6 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
                 </div>
                 <span className="attendance-popup-title">Attendance Registered</span>
                 <span className="attendance-popup-name-big">{attendancePopup.name}</span>
-                <span className="attendance-popup-conf">{attendancePopup.confidence}% match</span>
                 <span className="attendance-popup-hint">Press <kbd>Enter</kbd> to continue</span>
               </div>
             </div>
@@ -434,7 +475,6 @@ const FaceAttendance: React.FC<FaceAttendanceProps> = ({ modelsLoaded }) => {
                       }).format(record.time)}
                     </span>
                   </div>
-                  <span className="recent-item-confidence">{record.confidence}%</span>
                 </div>
               ))}
             </div>
