@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getAllAttendance, deleteAttendance, clearAllAttendance, type AttendanceRecord } from '../db/database';
-import { ClipboardList, Trash2, Trash, Clock, UserCheck, Calendar, Search, Download } from 'lucide-react';
+import { ClipboardList, Trash2, Trash, Clock, UserCheck, Calendar, Search, Download, LogIn, LogOut, Timer } from 'lucide-react';
 
 const AttendanceRecords: React.FC = () => {
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
@@ -32,13 +32,17 @@ const AttendanceRecords: React.FC = () => {
 
   const exportCSV = () => {
     const filtered = getFilteredRecords();
-    const headers = ['Name', 'Date', 'Time', 'Confidence'];
+    const headers = ['Name', 'Entry Date', 'Entry Time', 'Exit Date', 'Exit Time', 'Duration (minutes)', 'Confidence'];
     const rows = filtered.map(r => {
-      const d = new Date(r.timestamp);
+      const entry = new Date(r.entryTimestamp);
+      const exit = r.exitTimestamp ? new Date(r.exitTimestamp) : null;
       return [
         r.name,
-        d.toLocaleDateString(),
-        d.toLocaleTimeString(),
+        entry.toLocaleDateString(),
+        entry.toLocaleTimeString(),
+        exit ? exit.toLocaleDateString() : 'N/A',
+        exit ? exit.toLocaleTimeString() : 'N/A',
+        r.duration ?? 'N/A',
         `${r.confidence}%`
       ];
     });
@@ -60,7 +64,7 @@ const AttendanceRecords: React.FC = () => {
       
       let matchesDate = true;
       if (filterDate) {
-        const recordDate = new Date(record.timestamp).toISOString().split('T')[0];
+        const recordDate = new Date(record.entryTimestamp).toISOString().split('T')[0];
         matchesDate = recordDate === filterDate;
       }
 
@@ -70,9 +74,8 @@ const AttendanceRecords: React.FC = () => {
 
   const filteredRecords = getFilteredRecords();
 
-  // Group records by date
   const groupedRecords = filteredRecords.reduce<Record<string, AttendanceRecord[]>>((groups, record) => {
-    const date = new Date(record.timestamp).toLocaleDateString('en-US', {
+    const date = new Date(record.entryTimestamp).toLocaleDateString('en-US', {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
@@ -109,7 +112,6 @@ const AttendanceRecords: React.FC = () => {
         </div>
       </div>
 
-      {/* Filters */}
       <div className="records-filters">
         <div className="filter-input">
           <Search size={16} />
@@ -134,7 +136,7 @@ const AttendanceRecords: React.FC = () => {
         <div className="empty-state">
           <ClipboardList size={48} />
           <p>{records.length === 0 ? 'No attendance records yet' : 'No records match your filters'}</p>
-          <span>{records.length === 0 ? 'Use Face Attendance to record entries' : 'Try adjusting your search or date filter'}</span>
+          <span>{records.length === 0 ? 'Use the scan tabs to record entries and exits' : 'Try adjusting your search or date filter'}</span>
         </div>
       ) : (
         <div className="records-grouped">
@@ -143,12 +145,12 @@ const AttendanceRecords: React.FC = () => {
               <div className="record-group-header">
                 <Calendar size={16} />
                 <span>{date}</span>
-                <span className="group-count">{dateRecords.length} entries</span>
+                <span className="group-count">{dateRecords.length} records</span>
               </div>
 
               <div className="record-group-items">
                 {dateRecords.map((record) => (
-                  <div key={record.id} className="attendance-record-card">
+                  <div key={record.id} className={`attendance-record-card ${!record.exitTimestamp ? 'ongoing' : ''}`}>
                     <div className="record-avatar">
                       {record.photoDataUrl ? (
                         <img src={record.photoDataUrl} alt={record.name} />
@@ -158,19 +160,36 @@ const AttendanceRecords: React.FC = () => {
                     </div>
                     <div className="record-info">
                       <span className="record-name">{record.name}</span>
-                      <span className="record-time">
-                        <Clock size={12} />
-                        {new Intl.DateTimeFormat('en-US', {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                          second: '2-digit'
-                        }).format(new Date(record.timestamp))}
-                      </span>
+                      <div className="record-timestamps">
+                        <span className="record-time entry">
+                          <LogIn size={12} />
+                          {new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit' }).format(new Date(record.entryTimestamp))}
+                        </span>
+                        {record.exitTimestamp ? (
+                          <span className="record-time exit">
+                            <LogOut size={12} />
+                            {new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit' }).format(new Date(record.exitTimestamp))}
+                          </span>
+                        ) : (
+                          <span className="record-time ongoing-text">
+                            <Clock size={12} />
+                            In Progress
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="record-confidence">
-                      <span className={`confidence-badge ${record.confidence >= 70 ? 'high' : record.confidence >= 50 ? 'medium' : 'low'}`}>
-                        {record.confidence}%
-                      </span>
+                    <div className="record-details">
+                      {record.duration !== undefined && (
+                        <div className="record-duration">
+                          <Timer size={14} />
+                          <span>{record.duration} min</span>
+                        </div>
+                      )}
+                      <div className="record-confidence">
+                        <span className={`confidence-badge ${record.confidence >= 70 ? 'high' : record.confidence >= 50 ? 'medium' : 'low'}`}>
+                          {record.confidence}%
+                        </span>
+                      </div>
                     </div>
                     <button
                       className="icon-btn delete"

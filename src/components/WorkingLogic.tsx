@@ -315,7 +315,7 @@ const WorkingLogic: React.FC<WorkingLogicProps> = ({ modelsLoaded }) => {
         // Label above box: "FACE DETECTED" or name in later phases
         if (p === 'detection') {
           drawLabel('FACE DETECTED', x + width / 2, y - 14, '#818cf8');
-        } else if (p === 'done' && mResult && mResult.confidence >= 55) {
+        } else if (p === 'done' && mResult && mResult.confidence >= 50) {
           drawLabel(`✓ ${mResult.name} — ${mResult.confidence}%`, x + width / 2, y - 14, '#059669');
         } else if (p === 'done' && mResult) {
           drawLabel('UNKNOWN FACE', x + width / 2, y - 14, '#dc2626');
@@ -472,7 +472,7 @@ const WorkingLogic: React.FC<WorkingLogicProps> = ({ modelsLoaded }) => {
 
       // Draw match result overlay at the bottom
       if (p === 'done' && mResult) {
-        const isMatch = mResult.confidence >= 55;
+        const isMatch = mResult.confidence >= 50;
 
         // "Flying" connection line from face to result
         ctx.save();
@@ -583,18 +583,27 @@ const WorkingLogic: React.FC<WorkingLogicProps> = ({ modelsLoaded }) => {
       intervalRef.current = id;
     });
 
-    // Detect face
+    // Detect face — try TinyFaceDetector first (fast), fallback to SSD
     const video = videoRef.current!;
-    const ssdOptions = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.3 });
+    const tinyOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.4 });
     let result = await faceapi
-      .detectSingleFace(video as any, ssdOptions)
+      .detectSingleFace(video as any, tinyOptions)
       .withFaceLandmarks()
       .withFaceDescriptor();
 
     if (!result) {
-      const tinyOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 });
+      const ssdOptions = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.35 });
       result = await faceapi
-        .detectSingleFace(video as any, tinyOptions)
+        .detectSingleFace(video as any, ssdOptions)
+        .withFaceLandmarks()
+        .withFaceDescriptor();
+    }
+
+    // Last resort: TinyFaceDetector with larger input for distant faces
+    if (!result) {
+      const tinyLarge = new faceapi.TinyFaceDetectorOptions({ inputSize: 608, scoreThreshold: 0.3 });
+      result = await faceapi
+        .detectSingleFace(video as any, tinyLarge)
         .withFaceLandmarks()
         .withFaceDescriptor();
     }
@@ -722,7 +731,7 @@ const WorkingLogic: React.FC<WorkingLogicProps> = ({ modelsLoaded }) => {
         new faceapi.LabeledFaceDescriptors(`${id}:${name}`, descriptors)
     );
 
-    const matcher = new faceapi.FaceMatcher(labeled, 0.45);
+    const matcher = new faceapi.FaceMatcher(labeled, 0.6);
     const bestMatch = matcher.findBestMatch(result.descriptor);
 
     // Animate progress bar slowly
@@ -928,7 +937,7 @@ const WorkingLogic: React.FC<WorkingLogicProps> = ({ modelsLoaded }) => {
                   <div className="wl-match-info">
                     <span className="wl-match-name">{matchResult.name}</span>
                     <span className="wl-match-conf">
-                      {matchResult.confidence >= 55
+                      {matchResult.confidence >= 50
                         ? `Match Found: ${matchResult.confidence}%`
                         : matchResult.name === 'Unknown'
                           ? 'No match in gallery'

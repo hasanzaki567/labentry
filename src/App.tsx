@@ -2,19 +2,20 @@ import { useState, useEffect } from 'react';
 import * as faceapi from '@vladmandic/face-api';
 import Header from './components/Header';
 import FaceRegistration from './components/FaceRegistration';
-import FaceAttendance from './components/FaceAttendance';
+import EntranceAttendance from './components/EntranceAttendance';
+import ExitAttendance from './components/ExitAttendance';
 import AttendanceRecords from './components/AttendanceRecords';
 import WorkingLogic from './components/WorkingLogic';
 import './App.css';
 
-type AppTab = 'face-register' | 'face-attendance' | 'attendance-records' | 'working-logic';
+type AppTab = 'face-register' | 'entrance-scan' | 'exit-scan' | 'attendance-records' | 'working-logic';
 
 function App() {
-  const [activeTab, setActiveTab] = useState<AppTab>('face-attendance');
+  const [activeTab, setActiveTab] = useState<AppTab>('entrance-scan');
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
 
-  // Load face-api models when face tab is accessed
+  // Load face-api models when a face-related tab is accessed
   useEffect(() => {
     if (!modelsLoaded && !modelsLoading) {
       loadFaceModels();
@@ -25,7 +26,6 @@ function App() {
     setModelsLoading(true);
     try {
       const MODEL_URL = '/models';
-      // Load core models required for face detection & recognition
       await Promise.all([
         faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
         faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
@@ -35,7 +35,6 @@ function App() {
       setModelsLoaded(true);
       console.log('Face-api core models loaded successfully');
 
-      // Load expression model separately — non-blocking
       try {
         await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
         console.log('Expression model loaded');
@@ -53,7 +52,6 @@ function App() {
     <div className="app">
       <Header />
       
-      {/* Tab Navigation */}
       <nav className="app-tabs">
         <button 
           className={`tab-btn ${activeTab === 'face-register' ? 'active' : ''}`}
@@ -63,11 +61,18 @@ function App() {
           Register Face
         </button>
         <button 
-          className={`tab-btn ${activeTab === 'face-attendance' ? 'active' : ''}`}
-          onClick={() => setActiveTab('face-attendance')}
+          className={`tab-btn ${activeTab === 'entrance-scan' ? 'active' : ''}`}
+          onClick={() => setActiveTab('entrance-scan')}
         >
-          <span className="tab-icon">📸</span>
-          Face Attendance
+          <span className="tab-icon">🚪</span>
+          Entrance Scan
+        </button>
+        <button 
+          className={`tab-btn ${activeTab === 'exit-scan' ? 'active' : ''}`}
+          onClick={() => setActiveTab('exit-scan')}
+        >
+          <span className="tab-icon">🚶</span>
+          Exit Scan
         </button>
         <button 
           className={`tab-btn ${activeTab === 'attendance-records' ? 'active' : ''}`}
@@ -85,7 +90,6 @@ function App() {
         </button>
       </nav>
 
-      {/* Models Loading Indicator */}
       {modelsLoading && (
         <div className="models-loading-bar">
           <div className="models-loading-progress"></div>
@@ -100,9 +104,15 @@ function App() {
           </div>
         )}
 
-        {activeTab === 'face-attendance' && (
+        {activeTab === 'entrance-scan' && (
           <div className="face-section">
-            <FaceAttendance modelsLoaded={modelsLoaded} />
+            <EntranceAttendance modelsLoaded={modelsLoaded} />
+          </div>
+        )}
+
+        {activeTab === 'exit-scan' && (
+          <div className="face-section">
+            <ExitAttendance modelsLoaded={modelsLoaded} />
           </div>
         )}
 

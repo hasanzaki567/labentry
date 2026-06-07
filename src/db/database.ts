@@ -21,7 +21,9 @@ export interface AttendanceRecord {
   id?: number;
   faceId: number;
   name: string;
-  timestamp: Date;
+  entryTimestamp: Date;
+  exitTimestamp?: Date;
+  duration?: number; // in minutes
   confidence: number;
   photoDataUrl?: string; // snapshot at attendance time
 }
@@ -44,7 +46,7 @@ export class LabEntryDatabase extends Dexie {
     this.version(3).stores({
       barcodes: '++id, barcodeText, barcodeFormat, scannedAt',
       faces: '++id, name, registeredAt',
-      attendance: '++id, faceId, name, timestamp, [faceId+timestamp]'
+      attendance: '++id, faceId, name, entryTimestamp, exitTimestamp, [faceId+entryTimestamp]'
     });
   }
 }
@@ -90,17 +92,61 @@ export const clearAllFaces = async (): Promise<void> => {
 };
 
 // Attendance helper functions
+export const addOrUpdateAttendance = async (entry: { faceId: number; name: string; confidence: number; photoDataUrl?: string }, isExit: boolean): Promise<{type: 'entry' | 'exit', duration?: number}> => {
+  const now = new Date();
+
+  if (isExit) {
+    // This is an exit scan
+    const latestRecord = await db.attendance
+      .where('faceId').equals(entry.faceId)
+      .and(record => !record.exitTimestamp)
+      .last();
+
+    if (latestRecord) {
+      const entryTime = latestRecord.entryTimestamp.getTime();
+      const exitTime = now.getTime();
+      const duration = Math.round((exitTime - entryTime) / (1000 * 60)); // duration in minutes
+
+      await db.attendance.update(latestRecord.id!, {
+        exitTimestamp: now,
+        duration: duration,
+      });
+      return { type: 'exit', duration };
+    }
+    // If no open entry found, we might want to handle this case, but for now we do nothing.
+    throw new Error('No open entry record found to mark as exit.');
+  } else {
+    // This is an entry scan
+    await db.attendance.add({
+      faceId: entry.faceId,
+      name: entry.name,
+      entryTimestamp: now,
+      confidence: entry.confidence,
+      photoDataUrl: entry.photoDataUrl,
+    });
+    return { type: 'entry' };
+  }
+};
+
 export const addAttendance = async (entry: Omit<AttendanceRecord, 'id'>): Promise<number> => {
-  return await db.attendance.add(entry);
+  return await db.attendance.add({ ...entry, entryTimestamp: entry.entryTimestamp || new Date() });
 };
 
 export const getAllAttendance = async (): Promise<AttendanceRecord[]> => {
-  return await db.attendance.orderBy('timestamp').reverse().toArray();
+  return await db.attendance.orderBy('entryTimestamp').reverse().toArray();
 };
 
 export const getLatestAttendanceByFaceId = async (faceId: number): Promise<AttendanceRecord | undefined> => {
   const records = await db.attendance.where('faceId').equals(faceId).toArray();
-  return records.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+  return records.sort((a, b) => new Date(b.entryTimestamp).getTime() - new Date(a.entryTimestamp).getTime())[0];
+};
+
+export const hasOpenAttendanceForFace = async (faceId: number): Promise<boolean> => {
+  const openRecord = await db.attendance
+    .where('faceId').equals(faceId)
+    .and(record => !record.exitTimestamp)
+    .first();
+  return !!openRecord;
 };
 
 export const hasAttendanceForFaceOnDate = async (faceId: number, date: Date = new Date()): Promise<boolean> => {
@@ -111,7 +157,7 @@ export const hasAttendanceForFaceOnDate = async (faceId: number, date: Date = ne
   dayEnd.setDate(dayEnd.getDate() + 1);
 
   const existing = await db.attendance
-    .where('[faceId+timestamp]')
+    .where('[faceId+entryTimestamp]')
     .between([faceId, dayStart], [faceId, dayEnd], true, false)
     .first();
 
@@ -124,7 +170,7 @@ export const getTodayAttendance = async (): Promise<AttendanceRecord[]> => {
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
   return await db.attendance
-    .where('timestamp')
+    .where('entryTimestamp')
     .between(today, tomorrow)
     .reverse()
     .toArray();
