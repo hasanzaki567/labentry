@@ -1,4 +1,4 @@
-hi so this project is
+Hi so this project is
 
 # LabEntry — Face Attendance & Barcode Scanner
 
