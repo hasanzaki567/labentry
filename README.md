@@ -1,4 +1,4 @@
-hi everyone
+hi so this project is
 
 # LabEntry — Face Attendance & Barcode Scanner
 
