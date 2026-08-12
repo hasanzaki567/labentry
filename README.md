@@ -1,3 +1,5 @@
+hi everyone
+
 # LabEntry — Face Attendance & Barcode Scanner
 
 A lab/classroom entry management system with **real-time face recognition attendance** and **barcode scanning**, built with React + TypeScript. Runs entirely in the browser — no backend needed.
